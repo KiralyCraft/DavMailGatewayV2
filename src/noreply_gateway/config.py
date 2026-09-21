@@ -37,7 +37,7 @@ class WebConfig:
 
 @dataclass
 class AccountConfig:
-    sender: str = "noreply@example.org"
+    sender: str = ""
     login_username: str = ""
     backend: str = "ews"
     tenant_id: str = "common"
@@ -61,6 +61,14 @@ class AccountConfig:
             return "openid profile offline_access User.Read Mail.Send Mail.Send.Shared"
         resource_scope = "https://graph.microsoft.com/Mail.Send" if self.backend == "graph" else "https://outlook.office365.com/EWS.AccessAsUser.All"
         return "openid profile offline_access " + resource_scope
+
+
+@dataclass
+class AdditionalConfig:
+    tenant_id: str = ""
+    client_id: str = ""
+    redirect_uri: str = ""
+    client_secret_env: str = ""
 
 
 @dataclass
@@ -94,13 +102,17 @@ class Config:
     smtp: SMTPConfig = field(default_factory=SMTPConfig)
     web: WebConfig = field(default_factory=WebConfig)
     account: AccountConfig = field(default_factory=AccountConfig)
+    additional: AdditionalConfig = field(default_factory=AdditionalConfig)
     queue: QueueConfig = field(default_factory=QueueConfig)
     delivery: DeliveryConfig = field(default_factory=DeliveryConfig)
 
     def validate(self) -> None:
         from .message import mailbox
-        mailbox(self.account.sender)
-        mailbox(self.account.username)
+        if self.account.sender:
+            mailbox(self.account.sender)
+            mailbox(self.account.username)
+        elif self.account.login_username:
+            raise ValueError("account.login_username requires account.sender")
         if self.account.backend not in {"ews", "graph"}:
             raise ValueError("account.backend must be ews or graph")
         if not isinstance(self.account.send_shared, bool) or (self.account.send_shared and self.account.backend != "graph"):
@@ -115,6 +127,10 @@ class Config:
             raise ValueError("Invalid tenant_id")
         if re.fullmatch(r"[0-9a-fA-F-]{36}", self.account.client_id) is None:
             raise ValueError("client_id must be an application UUID")
+        if self.additional.tenant_id and re.fullmatch(r"[A-Za-z0-9.-]+", self.additional.tenant_id) is None:
+            raise ValueError("additional.tenant_id is invalid")
+        if self.additional.client_id and re.fullmatch(r"[0-9a-fA-F-]{36}", self.additional.client_id) is None:
+            raise ValueError("additional.client_id must be an application UUID")
         networks = [ipaddress.ip_network(x) for x in self.smtp.allowed_networks]
         if len(networks) == 0 or any(x.prefixlen == 0 for x in networks):
             raise ValueError("Explicit, non-world SMTP client CIDRs are required")
@@ -156,18 +172,24 @@ class Config:
             raise ValueError("Invalid OAuth redirect URI")
         if redirect.scheme == "http" and redirect.hostname not in {"localhost", "127.0.0.1", "::1"}:
             raise ValueError("Plain HTTP OAuth callbacks must be loopback")
+        if self.additional.redirect_uri:
+            extra_redirect = urlsplit(self.additional.redirect_uri)
+            if extra_redirect.scheme not in {"https", "http"} or extra_redirect.hostname is None or extra_redirect.query or extra_redirect.fragment or extra_redirect.username or extra_redirect.password:
+                raise ValueError("Invalid additional OAuth redirect URI")
+            if extra_redirect.scheme == "http" and extra_redirect.hostname not in {"localhost", "127.0.0.1", "::1"}:
+                raise ValueError("Plain HTTP additional OAuth callbacks must be loopback")
         self.web.base_url = self.web.base_url.rstrip("/")
 
 
 def load_config(path: Path) -> Config:
     raw = tomllib.loads(path.read_text())
-    unknown = set(raw) - {"data_dir", "smtp", "web", "account", "queue", "delivery"}
+    unknown = set(raw) - {"data_dir", "smtp", "web", "account", "additional", "queue", "delivery"}
     if unknown:
         raise ValueError("Unknown configuration keys: " + ", ".join(sorted(unknown)))
     result = Config(data_dir=Path(raw.get("data_dir", "./state")).expanduser())
     if result.data_dir.is_absolute() is False:
         result.data_dir = (path.resolve().parent / result.data_dir).resolve()
-    for name, cls in (("smtp", SMTPConfig), ("web", WebConfig), ("account", AccountConfig), ("queue", QueueConfig), ("delivery", DeliveryConfig)):
+    for name, cls in (("smtp", SMTPConfig), ("web", WebConfig), ("account", AccountConfig), ("additional", AdditionalConfig), ("queue", QueueConfig), ("delivery", DeliveryConfig)):
         table = raw.get(name, {})
         unknown = set(table) - {f.name for f in fields(cls)}
         if unknown:

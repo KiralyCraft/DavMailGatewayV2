@@ -9,7 +9,7 @@ from .backend import MicrosoftBackend
 from .config import Config
 from .errors import AuthenticationRequired
 from .message import mailbox
-from .oauth import TokenManager
+from .oauth import TokenManager, account_fingerprint
 from .security import Vault
 
 
@@ -28,6 +28,17 @@ class AdditionalSender:
         additional_config.account.backend = "graph"
         additional_config.account.send_shared = True
         additional_config.account.save_in_sent = True
+        for name in ("tenant_id", "client_id", "redirect_uri", "client_secret_env"):
+            value = getattr(config.additional, name)
+            if value:
+                setattr(additional_config.account, name, value)
+        legacy_fingerprint = account_fingerprint(additional_config)
+        additional_config.account.sender = ""
+        additional_config.account.login_username = ""
+        record = vault.read("additional_account")
+        if record.get("fingerprint") == legacy_fingerprint and legacy_fingerprint != account_fingerprint(additional_config):
+            record["fingerprint"] = account_fingerprint(additional_config)
+            vault.write("additional_account", record)
         self.tokens = TokenManager(additional_config, vault, session, record_name="additional_account", allow_any_username=True)
         self.backend = MicrosoftBackend(additional_config, self.tokens, session)
         self.choice = vault.read("additional_sender")

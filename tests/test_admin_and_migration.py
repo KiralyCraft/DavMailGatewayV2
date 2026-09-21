@@ -109,6 +109,12 @@ async def test_additional_sender_choice_requires_admin_and_keeps_original_accoun
     assert 'id="sender-dialog"' in html
     assert 'id="default-sender"' in html
     assert 'id="oauth-status"' in html and 'id="sender-status"' in html
+    assert 'id="additional-identity"' in html
+    assert 'id="additional-default"' in html
+    assert 'id="additional-from"' in html
+    assert 'id="additional-delivery"' in html
+    assert "Microsoft sending account" in html
+    assert 'id="legacy-route" hidden' in html
     assert (await session.post(url + "/api/additional/sender", json={"mode": "default"})).status == 401
     headers = await login(session, url)
     assert (await session.post(url + "/api/additional/sender", json={"mode": "default"}, headers=headers)).status == 400
@@ -211,6 +217,42 @@ async def test_oauth_flow_bound_to_admin_session_and_consumed(admin):
     assert "Start a new" in await response.text()
 
 
+async def test_additional_oauth_uses_its_own_gateway_callback(admin, vault):
+    session, url, ui = admin
+    ui.config.additional.client_id = "11111111-2222-3333-4444-555555555555"
+    ui.config.additional.redirect_uri = url + "/oauth/callback"
+    ui.additional = AdditionalSender(ui.config, vault, None, None)
+    headers = await login(session, url)
+    started = await session.post(url + "/api/additional/login", json={}, headers=headers)
+    assert started.status == 200
+    payload = await started.json()
+    assert payload["redirect_uri"] == url + "/oauth/callback"
+    assert payload["authorization_url"] != ""
+    flow = next(iter(ui.sessions.values())).flow
+    assert flow is not None
+
+    async def complete_login(value, response):
+        assert value is flow
+        assert response == {"code": "OFFLINE", "state": flow.state}
+        ui.additional.tokens.record.update(username="person@example.test", default_sender="person@example.test", refresh_token="offline")
+    ui.additional.tokens.complete_login = complete_login
+    callback = await session.get(url + "/oauth/callback", params={"code": "OFFLINE", "state": flow.state}, allow_redirects=False)
+    assert callback.status == 303
+    assert callback.headers["Location"] == "/"
+    assert (await session.get(url + "/oauth/callback", params={"code": "OFFLINE", "state": flow.state})).status == 400
+
+
+async def test_senderless_gateway_is_ready_with_selected_microsoft_account(admin, vault):
+    session, url, ui = admin
+    ui.config.account.sender = ""
+    ui.additional = AdditionalSender(ui.config, vault, None, None)
+    ui.additional.tokens.record.update(username="person@example.test", default_sender="person@example.test", refresh_token="offline")
+    await ui.additional.choose("default")
+    assert (await session.get(url + "/health/ready")).status == 200
+    await ui.dispatcher.pause(True)
+    assert (await session.get(url + "/health/ready")).status == 503
+
+
 async def test_remote_login_rate_limit(admin):
     session, url, ui = admin
     for index in range(6):
@@ -284,4 +326,5 @@ def test_config_roundtrip(config, tmp_path):
     path.write_text(config_text(config))
     reread = load_config(path)
     assert reread.account == config.account
+    assert reread.additional == config.additional
     assert reread.smtp == config.smtp

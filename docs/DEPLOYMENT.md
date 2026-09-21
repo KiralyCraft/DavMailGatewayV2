@@ -21,7 +21,7 @@ sudo install -m 0640 -o root -g noreply-gateway \
     /var/lib/noreply-gateway/gateway.toml /etc/noreply-gateway/gateway.toml
 ```
 
-Edit `/etc/noreply-gateway/gateway.toml` for the correct sender, account registration, client CIDRs and browser origin. Replace all example account values with the values for your own tenant; Graph is recommended for new deployments. To import local DavMail settings, add `--from-davmail PATH` during initialization and ensure that the service user can read that file; do not loosen its permissions globally. Add `--import-token` only when intentionally migrating the exposed base64 credential instead of performing a fresh login.
+Edit `/etc/noreply-gateway/gateway.toml` for the Microsoft application registration, client CIDRs and browser origin. A new installation can leave `account.sender` empty and select its From address in the web UI after Microsoft login. Set `account.sender` only when preserving a separate legacy route. Replace example account values with the values for your tenant; Graph is recommended for new deployments. To import local DavMail settings, add `--from-davmail PATH` during initialization and ensure that the service user can read that file; do not loosen its permissions globally. Add `--import-token` only when intentionally migrating the exposed base64 credential instead of performing a fresh login.
 
 ```bash
 sudo install -m 0644 deploy/noreply-gateway.service /etc/systemd/system/
@@ -32,7 +32,7 @@ sudo journalctl -u noreply-gateway -f
 
 The service logs its binding/backend and sanitized operational failure types. It does not log message bodies, OAuth codes, passwords or access/refresh tokens. There is no verbose HTTP-debug mode. Inspect the administrative queue for per-message errors. A systemd restart does not make an ambiguous send safe to replay; restart recovery deliberately holds it.
 
-For a confidential OAuth Web app, set an appropriately protected `/etc/noreply-gateway/secrets.env` containing the environment variable named in `account.client_secret_env`. This is the application's secret, not the user's Microsoft password or SMTP client password. Keep the variable out of process arguments, shell history and source control.
+For a confidential OAuth Web app, set an appropriately protected `/etc/noreply-gateway/secrets.env` containing the environment variable named in `additional.client_secret_env` (or `account.client_secret_env` for a legacy route). This is the application's secret, not the user's Microsoft password or SMTP client password. Keep the variable out of process arguments, shell history and source control.
 
 ### Remote administration
 
@@ -44,7 +44,7 @@ ssh -L 8080:127.0.0.1:8080 administrator@gateway-server
 
 Then use `http://127.0.0.1:8080` locally, matching the default `web.base_url` exactly. For an HTTPS service, adapt `deploy/nginx.conf` or [the separate Apache e10 example](../deploy/e10-internal-mailgateway.ext) and set the exact public HTTPS URL in `web.base_url`. For Apache, explicitly include the e10 file inside the intended HTTPS virtual host **before** its catch-all `ProxyPass /` mapping; keep `ProxyAddHeaders On` so the last forwarded address is the real client. A path-prefix deployment such as `https://example.org/internal/mailgateway` must forward that same prefix to the gateway and map the untrailed prefix so the application can redirect it to a trailing slash. The proxy must preserve the browser Host header. With non-default ports, include the port in the configured URL. Bind the HTTP listener only to a private interface reachable by the proxy and restrict that port to the proxy host. If `web.trusted_proxy_ips` is set, the trusted proxy must append the real client IP last in `X-Forwarded-For`; untrusted peers cannot supply the login rate-limit key.
 
-For automatic login callback, register and configure the exact origin plus `/oauth/callback`. A native-client redirect instead uses manual URL paste-back. Public/native and confidential/Web Entra registration types have different requirements; choose the matching setup in the README. Test callback behavior under the tenant's actual MFA/Conditional Access rules.
+For automatic login callback, register and configure the exact origin plus `/oauth/callback`. The connected Graph account may use the separate `[additional]` client ID, redirect URI, and client-secret environment variable, leaving a legacy sender's OAuth configuration unchanged. A native-client redirect instead uses manual URL paste-back. Public/native and confidential/Web Entra registration types have different requirements; choose the matching setup in the README. Test callback behavior under the tenant's actual MFA/Conditional Access rules.
 
 ## Docker on Linux
 
@@ -75,7 +75,7 @@ The image build installs the declared dependencies from the configured Python pa
 ## Initial acceptance and cutover
 
 1. Keep SMTP bound to loopback and application traffic on the old gateway. Validate configuration and WebUI login. Sign into the correct Microsoft account through the new UI. Do not run a load test against the actual mailbox.
-2. Send one uniquely identified normal message and one NAT message to a controlled recipient. Verify the visible From/Subject, MIME/attachment integrity, and Sent Items copy. Check message trace or actual receipt; `submitted` alone is not that proof.
+2. Send one uniquely identified normal message to a controlled recipient. If a legacy sender is configured, also test one NAT message. Verify the visible From/Subject, MIME/attachment integrity, and Sent Items copy. Check message trace or actual receipt; `submitted` alone is not that proof.
 3. Test To/Cc/Bcc and SMTP-only recipient handling with controlled addresses. The default preserves DavMail's recipient union; use `envelope_strict` when header-only recipients should instead be rejected.
 4. Stop the old gateway, set the reviewed binds/CIDRs/firewall, then redirect application traffic. Keep the conservative upstream rate. Watch queue age, retained bytes, retries, quota use, and attention states.
 5. For rollback, stop new intake, pause sending and preserve the queue. Reconcile any in-flight/uncertain entries before routing or replaying mail elsewhere. Do not start both gateways against the same submitted workload or erase the queue to make an alert disappear.
@@ -86,7 +86,7 @@ The package does not support 100 sustained Microsoft-mailbox sends/second. Decid
 
 An operator pause is persisted and does not stop intake. Backoff is persisted across restart. Credentials are locally encrypted and rotated, while in-memory WebUI sessions are deliberately not persisted. Account disconnect removes local credentials and pauses delivery, but does not revoke Microsoft grants and cannot undo requests already in flight.
 
-The optional additional Microsoft connection uses `additional_account.enc` and its selected From address uses `additional_sender.enc` in the same private state directory. Back up or restore them with the original credential, vault key, and queue. The original account continues to serve its configured From address. A missing or expired additional credential causes only its messages to retry while the original account continues; inspect that queue before replacing the additional Microsoft identity.
+The web UI's Microsoft sending account uses `additional_account.enc` and its selected From address uses `additional_sender.enc` in the same private state directory. Back up or restore them with the vault key and queue, plus the original credential if a legacy sender exists. New installations can leave `account.sender` empty; the login supplies the default address. A configured legacy sender continues to serve its original From address. A missing or expired connected credential causes its messages to retry; inspect that queue before replacing the Microsoft identity.
 
 Stop the service before `reset-admin`. Stop it before moving/restoring the private state directory. Preserve ownership and permissions. The copied configuration's `data_dir` is absolute, so moving only the TOML file does not move its queue.
 

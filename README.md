@@ -1,6 +1,6 @@
 # DavMailGatewayV2
 
-DavMailGatewayV2 lets applications on a trusted network send email through Microsoft 365. An application speaks ordinary SMTP to this service; the service stores the message in a local queue and submits it to Microsoft using a connected account. An optional second Microsoft connection can send from its own address or one delegated address.
+DavMailGatewayV2 lets applications on a trusted network send email through Microsoft 365. An application speaks ordinary SMTP to this service; the service stores the message in a local queue and submits it to Microsoft using a connected account. The administrator signs in to Microsoft and chooses that account's own address or one delegated From address in the web UI. Existing deployments may also retain a separately configured legacy sender.
 
     Your application → SMTP → DavMailGatewayV2 → Microsoft 365 → recipients
                                   │
@@ -19,7 +19,7 @@ The project began as a replacement for a patched DavMail sending setup. New depl
 | Component | Behavior |
 |---|---|
 | SMTP | Port 1025 by default; no AUTH advertisement or password; explicit client CIDR allowlist |
-| Sender | The configured address or the selected additional address must be the effective `From`; the original NAT marker still maps to the configured address |
+| Sender | The selected address must be the effective `From`; an optional legacy address remains accepted when configured |
 | NAT | Case-sensitive `_NAT_` in **From**, not Subject; rewrite From and append original identity to Subject |
 | Recipients | Preserves DavMail's union of To/Cc/Bcc and SMTP recipients; missing envelope recipients become Bcc |
 | EWS compatibility | OAuth bearer authentication; MIME `CreateItem` / `SendAndSaveCopy`, or `SendOnly` |
@@ -45,7 +45,6 @@ python -m pip install .
 
 noreply-gateway init --config ./gateway.toml \
     --backend graph \
-    --sender noreply@example.org \
     --tenant-id YOUR-TENANT-UUID \
     --client-id YOUR-APPLICATION-UUID \
     --redirect-uri https://login.microsoftonline.com/common/oauth2/nativeclient
@@ -53,7 +52,7 @@ noreply-gateway check --config ./gateway.toml
 noreply-gateway serve --config ./gateway.toml
 ~~~
 
-Replace the example mailbox and UUIDs with your own values. The initialization command asks for an **administration website password** and creates private local state. It does not ask for a Microsoft password. Open http://127.0.0.1:8080 on the server, log in, and choose **Begin Microsoft login**. Complete Microsoft sign-in, then paste the final native-client redirect URL into the administration page. Never share that URL: it contains a short-lived authorization code.
+Replace the example UUIDs with your own values. The initialization command asks for an **administration website password** and creates private local state. It does not ask for a Microsoft password or sender address. Open http://127.0.0.1:8080 on the server, log in, and choose **Connect Microsoft account**. After sign-in, choose the read-only default address returned by Microsoft or enter a custom address the account may send from. With the native-client redirect shown above, paste the final redirect URL into the administration page. Never share that URL: it contains a short-lived authorization code.
 
 Only applications on the gateway host can use the default SMTP listener. To add another trusted application, configure its exact address in the SMTP allowlist and firewall as described below. Once the Microsoft account is connected, use the [normal client example](#normal-client-example) to send a controlled test message. Check the queue and recipient mailbox separately; a local SMTP success only confirms durable acceptance by the gateway.
 
@@ -110,15 +109,17 @@ noreply-gateway init --config ./gateway.toml \
 
 The two UUID arguments above must be replaced with actual UUIDs. Keep `save_in_sent = true`: this package's Graph backend uses MIME submission, not the JSON `saveToSentItems=false` path. It deliberately does not implement Graph draft creation or large-attachment upload sessions.
 
-To switch the configured account, pause delivery, let active attempts finish, stop the service, change `account.backend`, tenant, client, and redirect settings, then restart and sign in again. Changing the credential identity invalidates the cached credential. Changing the configured mailbox itself is refused while any bodies remain retained.
+To switch a legacy configured account, pause delivery, let active attempts finish, stop the service, change `account.backend`, tenant, client, and redirect settings, then restart and sign in again. Changing the credential identity invalidates the cached credential. Changing the configured mailbox itself is refused while any bodies remain retained.
 
-### Optional additional From address
+### Microsoft sending account and optional legacy route
 
-In the administration page, choose **Connect Microsoft account** under **Additional From address**. This connection is stored separately, so it does not replace the configured sending account. It uses the Graph application and redirect settings already configured for the gateway. The application must be allowed delegated `Mail.Send`, `Mail.Send.Shared`, and `User.Read`; tenant consent may be required.
+In the administration page, choose **Connect Microsoft account**. This Graph connection is stored separately from an optional legacy sender. By default it uses the application's tenant, client ID and redirect settings in `[account]`. The application must be allowed delegated `Mail.Send`, `Mail.Send.Shared`, and `User.Read`; tenant consent may be required.
+
+For automatic return from Microsoft without pasting a URL, register the exact gateway URL ending in `/oauth/callback` as a **Web** redirect in a Microsoft Entra application you control. Set `[additional].client_id` and `[additional].redirect_uri` to that application's values, and set `[additional].client_secret_env` to the name of an environment variable holding its client secret. The browser then returns to the signed-in administration page automatically. Use `[additional].tenant_id` only if this account needs a different tenant. These fields are optional and leave an existing legacy account's OAuth settings unchanged. The exact redirect registration, tenant consent and client secret must exist before enabling it; a `nativeclient` redirect continues to use the manual paste flow. Keep the secret out of the TOML file and source control.
 
 After Microsoft sign-in, the gateway reads the signed-in account's `mail` address from Graph `/me` (or its `userPrincipalName` when `mail` is empty). The sender dialog offers **Use default address**, displayed read-only, or **Use a custom address**, entered by the administrator. The gateway cannot list delegated mailboxes. Microsoft requires the signed-in user to have Exchange **Send As** or **Send on Behalf** rights for a custom address, and checks those rights when mail is submitted. A rejected Send As attempt is reported as failed in the queue. [Microsoft's delegated sending guidance](https://learn.microsoft.com/en-us/graph/outlook-send-mail-from-other-user) explains the permission model.
 
-SMTP clients select the additional address by putting the exact selected address in the message's `From` header. The original configured address remains accepted and uses its original Microsoft connection. Other From addresses are rejected. Changing the selected additional address affects new SMTP submissions; already queued messages retain their From header and remain routed through the additional connection. Send a controlled message and check the received From address before changing an automated application's mail settings.
+SMTP clients select the connected account by putting the exact selected address in the message's `From` header. If an older installation has `account.sender` configured, that address remains accepted and uses its own separate Microsoft connection; the web UI shows it inside **Legacy configured sender**. Other From addresses are rejected. Changing the selected address affects new SMTP submissions; already queued messages retain their From header and remain routed through the same connection. Send a controlled message and check the received From address before changing an automated application's mail settings.
 
 ## Configure trusted SMTP clients
 
@@ -144,7 +145,7 @@ import smtplib
 from email.message import EmailMessage
 
 message = EmailMessage()
-message["From"] = "noreply@example.org"
+message["From"] = "selected-address@example.org"  # Match the web UI's selected From address.
 message["To"] = "recipient@example.org"
 message["Subject"] = "Gateway test"
 message.set_content("A test sent through the standalone gateway.")
@@ -155,7 +156,7 @@ with smtplib.SMTP("127.0.0.1", 1025, timeout=30) as smtp:
 
 No Microsoft password or access token is needed on the client. In compatibility with the Java source, SMTP `MAIL FROM` is not used as the final sending identity; **the effective MIME From is validated**. A syntactically valid empty envelope sender is accepted. Replies are not automatically redirected to the original envelope sender. The package does not observe bounces or generate asynchronous DSNs.
 
-### Preserved NAT example
+### Preserved NAT example for legacy senders
 
 Submit:
 
@@ -173,7 +174,7 @@ To: recipient@example.org
 Subject: Build completed (Sender: alice@example.org)
 ```
 
-The marker is case-sensitive, can also occur in the From display name, and all its occurrences are removed from the identity appended to Subject. NAT does not change recipients, the MIME body, attachments, or an existing Reply-To. Putting `_NAT_` in Subject alone does nothing. When Subject is absent, the source's literal `null (Sender: ...)` behavior is retained. Header whitespace/encoding is normalized by Python; byte-for-byte preservation of Java header serialization is not promised.
+This behavior requires an optional configured legacy sender such as `noreply@example.org`; senderless installations reject NAT-marked messages. The marker is case-sensitive, can also occur in the From display name, and all its occurrences are removed from the identity appended to Subject. NAT does not change recipients, the MIME body, attachments, or an existing Reply-To. Putting `_NAT_` in Subject alone does nothing. When Subject is absent, the source's literal `null (Sender: ...)` behavior is retained. Header whitespace/encoding is normalized by Python; byte-for-byte preservation of Java header serialization is not promised.
 
 For safety, the final effective From is resolved **after applying Resent-From but before NAT and validation**. This prevents Resent-From from undoing the sender rewrite. Duplicate/conflicting sender headers are rejected.
 

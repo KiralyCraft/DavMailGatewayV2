@@ -18,7 +18,7 @@ from .service import serve
 
 def config_text(config: Config) -> str:
     result = ["# SMTP has no AUTH. Restrict trusted clients with CIDRs AND a firewall.", "# The WebUI password is separate. Never put Microsoft tokens in this file.", "data_dir = " + json.dumps(str(config.data_dir)), ""]
-    for section in ("smtp", "web", "account", "queue", "delivery"):
+    for section in ("smtp", "web", "account", "additional", "queue", "delivery"):
         result.append("[" + section + "]")
         for key, value in asdict(getattr(config, section)).items():
             result.append(key + " = " + json.dumps(value, ensure_ascii=True))
@@ -46,6 +46,8 @@ def initialize(args) -> None:
     properties = read_properties(args.from_davmail) if args.from_davmail else None
     if properties is not None:
         apply_davmail(config, properties)
+    elif args.sender is None and args.backend is None:
+        config.account.backend = "graph"
     for name in ("sender", "backend", "tenant_id", "client_id", "redirect_uri"):
         value = getattr(args, name)
         if value is not None:

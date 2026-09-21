@@ -240,6 +240,8 @@ class AdminUI:
         return web.json_response({"ok": True})
 
     async def begin_login(self, request):
+        if not self.config.account.sender:
+            raise ValueError("No legacy sender is configured")
         url, flow = self.tokens.begin_login()
         request["admin_session"].flow = flow
         request["admin_session"].flow_kind = "original"
@@ -251,7 +253,7 @@ class AdminUI:
         url, flow = self.additional.tokens.begin_login()
         request["admin_session"].flow = flow
         request["admin_session"].flow_kind = "additional"
-        return web.json_response({"authorization_url": url, "redirect_uri": self.config.account.redirect_uri})
+        return web.json_response({"authorization_url": url, "redirect_uri": self.additional.tokens.config.account.redirect_uri})
 
     async def _finish(self, request, response: dict):
         session = request["admin_session"]
@@ -271,7 +273,9 @@ class AdminUI:
         if isinstance(url, str) is False or len(url) > 24_000:
             raise ValueError("Invalid redirect URL")
         parsed = urlsplit(url)
-        expected = urlsplit(self.config.account.redirect_uri)
+        session = request["admin_session"]
+        redirect_uri = self.additional.tokens.config.account.redirect_uri if session.flow_kind == "additional" else self.config.account.redirect_uri
+        expected = urlsplit(redirect_uri)
         if (parsed.scheme, parsed.netloc, parsed.path) != (expected.scheme, expected.netloc, expected.path):
             raise ValueError("Paste the complete final URL from the configured Microsoft redirect page")
         items = parse_qsl(parsed.query, keep_blank_values=True)
@@ -288,7 +292,9 @@ class AdminUI:
         return web.json_response({"ok": True, "additional": self.additional.status()})
 
     async def callback(self, request):
-        if self.config.account.redirect_uri != self.config.web.base_url + "/oauth/callback":
+        session = request["admin_session"]
+        redirect_uri = self.additional.tokens.config.account.redirect_uri if session.flow_kind == "additional" else self.config.account.redirect_uri
+        if redirect_uri != self.config.web.base_url + "/oauth/callback":
             raise ValueError("This callback is not the configured redirect URI")
         if len(set(request.query)) != len(list(request.query.items())):
             raise ValueError("Duplicate OAuth callback parameters")
@@ -296,6 +302,8 @@ class AdminUI:
         return web.Response(status=303, headers={"Location": self.prefix + "/"})
 
     async def disconnect(self, request):
+        if not self.config.account.sender:
+            raise ValueError("No legacy sender is configured")
         await self.dispatcher.pause(True)
         await self.tokens.disconnect()
         return web.json_response({"ok": True})
@@ -306,5 +314,8 @@ class AdminUI:
     async def ready(self, request):
         stats = await self.store.stats()
         account = self.tokens.status()
-        ready = self.store.healthy and self.store.accepting and self.dispatcher.paused is False and account["credential_present"] and account["needs_login"] is False and stats["counters"].get("retained_messages", 0) < self.config.queue.max_messages and stats["counters"].get("retained_bytes", 0) < self.config.queue.max_bytes and stats["disk_free_bytes"] >= self.config.queue.min_free_bytes
+        additional = self.additional.status() if self.additional else None
+        original_ready = bool(self.config.account.sender and account["credential_present"] and not account["needs_login"])
+        additional_ready = bool(additional and additional["selected_sender"] and additional["account"]["credential_present"] and not additional["account"]["needs_login"])
+        ready = self.store.healthy and self.store.accepting and self.dispatcher.paused is False and (original_ready or additional_ready) and stats["counters"].get("retained_messages", 0) < self.config.queue.max_messages and stats["counters"].get("retained_bytes", 0) < self.config.queue.max_bytes and stats["disk_free_bytes"] >= self.config.queue.min_free_bytes
         return web.json_response({"status": "ready" if ready else "not_ready"}, status=200 if ready else 503)

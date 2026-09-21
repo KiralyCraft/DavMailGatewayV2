@@ -74,13 +74,15 @@ def prepare_message(raw: bytes, recipients: list[str], envelope_sender: str, que
     original_from = str(sender_header)
     nat = config.account.nat_marker in original_from
     if nat:
+        if not config.account.sender:
+            raise MessageRejected("NAT sender rewriting requires a configured legacy sender")
         original = original_from.replace(config.account.nat_marker, "")
         subject = str(message["Subject"]) if message["Subject"] is not None else "null"
         del message["Subject"]
         message["Subject"] = subject + " (Sender: " + original + ")"
         message.replace_header("From", config.account.sender)
-    elif mailbox(sender_header.addresses[0].addr_spec).casefold() not in {config.account.sender.casefold(), additional_sender.casefold()}:
-        raise MessageRejected("From must match the configured sending mailbox, or contain the NAT marker")
+    elif mailbox(sender_header.addresses[0].addr_spec).casefold() not in {value.casefold() for value in (config.account.sender, additional_sender) if value}:
+        raise MessageRejected("From must match a connected sender address")
     sender = message["Sender"]
     if sender is not None and (sender.defects or len(sender.addresses) != 1 or sender.addresses[0].addr_spec.casefold() != mailbox(message["From"].addresses[0].addr_spec).casefold()):
         raise MessageRejected("Sender header must match the configured mailbox")

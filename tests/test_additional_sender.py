@@ -1,3 +1,4 @@
+from copy import deepcopy
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
@@ -39,6 +40,48 @@ def test_additional_login_requests_shared_send_and_profile(additional):
     assert {"Mail.Send", "Mail.Send.Shared", "User.Read", "offline_access"} <= scopes
     assert "login_hint" not in query
     assert query["state"] == [flow.state]
+
+
+def test_senderless_install_uses_selected_microsoft_address(config, vault):
+    config.account.sender = ""
+    config.smtp.port = 1025
+    config.validate()
+    sender = AdditionalSender(config, vault, None, None)
+    sender.tokens.record.update(username="person@example.test", default_sender="person@example.test", refresh_token="offline")
+    sender.choice = {"username": "person@example.test", "mode": "default", "custom_sender": ""}
+    raw = b"From: person@example.test\r\nTo: recipient@example.test\r\n\r\nhello\r\n"
+    assert prepare_message(raw, ["recipient@example.test"], "", "offline-id", config, sender.selected_sender).mime.startswith(b"From: person@example.test")
+    with pytest.raises(MessageRejected):
+        prepare_message(raw.replace(b"person@example.test", b"other@example.test"), ["recipient@example.test"], "", "offline-id", config, sender.selected_sender)
+    with pytest.raises(MessageRejected, match="NAT"):
+        prepare_message(raw.replace(b"person@example.test", b"_NAT_person@example.test"), ["recipient@example.test"], "", "offline-id", config, sender.selected_sender)
+
+
+def test_additional_oauth_settings_do_not_change_legacy_login(config, vault):
+    config.additional.client_id = "11111111-2222-3333-4444-555555555555"
+    config.additional.redirect_uri = "https://gateway.example.test/internal/mailgateway/oauth/callback"
+    config.smtp.port = 1025
+    config.validate()
+    sender = AdditionalSender(config, vault, None, None)
+    query = parse_qs(urlsplit(sender.tokens.begin_login()[0]).query)
+    assert query["client_id"] == [config.additional.client_id]
+    assert query["redirect_uri"] == [config.additional.redirect_uri]
+    assert config.account.redirect_uri == "https://login.microsoftonline.com/common/oauth2/nativeclient"
+
+
+def test_existing_additional_credential_becomes_independent_of_legacy_sender(config, vault):
+    previous = deepcopy(config)
+    previous.account.backend = "graph"
+    previous.account.send_shared = True
+    previous.account.save_in_sent = True
+    vault.write("additional_account", {"fingerprint": account_fingerprint(previous), "username": "person@example.test",
+                                       "default_sender": "person@example.test", "refresh_token": "offline"})
+    sender = AdditionalSender(config, vault, None, None)
+    assert sender.tokens.status()["credential_present"]
+    migrated = vault.read("additional_account")
+    config.account.sender = ""
+    assert AdditionalSender(config, vault, None, None).tokens.status()["credential_present"]
+    assert migrated["fingerprint"] == sender.tokens.record["fingerprint"]
 
 
 async def test_profile_address_is_read_from_microsoft(additional):
