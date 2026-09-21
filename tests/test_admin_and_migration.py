@@ -114,7 +114,7 @@ async def test_additional_sender_choice_requires_admin_and_keeps_original_accoun
     assert 'id="additional-from"' in html
     assert 'id="additional-delivery"' in html
     assert "Microsoft sending account" in html
-    assert 'id="legacy-route" hidden' in html
+    assert 'id="legacy-route"' not in html
     assert (await session.post(url + "/api/additional/sender", json={"mode": "default"})).status == 401
     headers = await login(session, url)
     assert (await session.post(url + "/api/additional/sender", json={"mode": "default"}, headers=headers)).status == 400
