@@ -113,9 +113,11 @@ async def test_additional_sender_choice_requires_admin_and_keeps_original_accoun
     assert 'id="additional-default"' in html
     assert 'id="additional-from"' in html
     assert 'id="additional-delivery"' in html
+    assert 'id="additional-disconnect"' in html
     assert "Microsoft sending account" in html
     assert 'id="legacy-route"' not in html
     assert (await session.post(url + "/api/additional/sender", json={"mode": "default"})).status == 401
+    assert (await session.post(url + "/api/additional/disconnect", json={})).status == 401
     headers = await login(session, url)
     assert (await session.post(url + "/api/additional/sender", json={"mode": "default"}, headers=headers)).status == 400
     vault.write("account", {"refresh_token": "original-offline-token"})
@@ -127,6 +129,15 @@ async def test_additional_sender_choice_requires_admin_and_keeps_original_accoun
     assert selected["default_sender"] == "person@example.test"
     assert selected["selected_sender"] == "shared@example.test"
     assert vault.read("account")["refresh_token"] == "original-offline-token"
+    response = await session.post(url + "/api/additional/disconnect", json={}, headers=headers)
+    assert response.status == 200
+    disconnected = (await response.json())["additional"]
+    assert disconnected["account"]["credential_present"] is False
+    assert disconnected["selected_sender"] == ""
+    assert vault.read("additional_account") == {}
+    assert vault.read("additional_sender") == {}
+    assert vault.read("account")["refresh_token"] == "original-offline-token"
+    assert ui.dispatcher.paused is False
 
 
 def test_prefixed_config_validation(config):

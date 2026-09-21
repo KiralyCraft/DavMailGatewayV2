@@ -59,6 +59,7 @@ class AdminUI:
             web.post(path("/api/control"), self.control), web.post(path("/api/account/login"), self.begin_login),
             web.post(path("/api/account/complete"), self.complete_login), web.post(path("/api/account/disconnect"), self.disconnect),
             web.post(path("/api/additional/login"), self.begin_additional_login), web.post(path("/api/additional/sender"), self.choose_additional_sender),
+            web.post(path("/api/additional/disconnect"), self.disconnect_additional),
             web.get(path("/oauth/callback"), self.callback), web.get(path("/health/live"), self.live), web.get(path("/health/ready"), self.ready),
         ])
         if self.prefix:
@@ -289,6 +290,12 @@ class AdminUI:
             raise ValueError("Additional sending account is unavailable")
         payload = await request.json()
         await self.additional.choose(payload.get("mode"), payload.get("custom_sender", ""))
+        return web.json_response({"ok": True, "additional": self.additional.status()})
+
+    async def disconnect_additional(self, request):
+        if self.additional is None:
+            raise ValueError("Additional sending account is unavailable")
+        await self.additional.disconnect()
         return web.json_response({"ok": True, "additional": self.additional.status()})
 
     async def callback(self, request):

@@ -69,6 +69,11 @@ class AdditionalSender:
         self.choice = {}
         await self._save_choice()
 
+    async def disconnect(self) -> None:
+        await self.tokens.disconnect()
+        self.choice = {}
+        await self._save_choice()
+
     async def choose(self, mode: str, custom_sender: str = "") -> str:
         if not self.default_sender:
             raise ValueError("Connect a Microsoft account first")

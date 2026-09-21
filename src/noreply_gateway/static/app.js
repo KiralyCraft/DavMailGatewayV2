@@ -40,6 +40,7 @@ function renderStats(data) {
         text("additional-from", additional.selected_sender || "—");
         element("additional-delivery").hidden = !data.paused;
         element("sender-change").hidden = !additional.default_sender;
+        element("additional-disconnect").hidden = !additional.account.credential_present;
         if (additional.choice_needed && !senderDialogDismissed && !element("sender-dialog").open) openSenderDialog(additional);
     }
     const state = data.healthy === false ? "Queue fault" : data.paused ? "Paused" : data.cooldown_remaining > 0 ? "Backing off" : "Running";
@@ -131,6 +132,7 @@ async function beginMicrosoftLogin(kind, path) {
     element("oauth-panel").hidden = false;
 }
 element("additional-login").addEventListener("click", () => guarded(() => beginMicrosoftLogin("additional", "/api/additional/login")));
+element("additional-disconnect").addEventListener("click", () => guarded(async () => { if (window.confirm("Disconnect this Microsoft account locally? New mail using its From address will be rejected, and queued mail using it will wait for a new login. An upstream request already in flight may still finish. The configured OJS sender and delivery pause setting are unaffected.") === false) return; await api("/api/additional/disconnect", {}); senderDialogDismissed = true; if (element("sender-dialog").open) element("sender-dialog").close(); notice("Microsoft account disconnected locally.", true); await refresh(); }));
 element("oauth-form").addEventListener("submit", (event) => { event.preventDefault(); const button = element("oauth-submit"); if (button.disabled) return; button.disabled = true; formStatus("oauth-status", "Completing Microsoft login…"); (async () => { try { const value = element("redirect-url").value; const result = await api("/api/account/complete", {redirect_url: value}); element("oauth-panel").hidden = true; element("redirect-url").value = ""; senderDialogDismissed = false; notice(oauthKind === "additional" ? "Microsoft account connected. Choose the From address." : "Account connected. Resume delivery when you are ready.", true); await refresh(); if (oauthKind === "additional" && result.additional && !element("sender-dialog").open) openSenderDialog(result.additional); } catch (error) { formStatus("oauth-status", error.message + ". Start a new Microsoft login before retrying if the code was used."); } finally { button.disabled = false; } })(); });
 element("sender-change").addEventListener("click", () => guarded(async () => { const data = await api("/api/stats"); openSenderDialog(data.additional); }));
 element("sender-form").addEventListener("change", () => { element("custom-sender").required = element("sender-form").elements["sender-mode"].value === "custom"; });
