@@ -23,9 +23,10 @@ class SMTPServer:
     Internet-facing unauthenticated relay: client CIDRs are mandatory.
     """
 
-    def __init__(self, config: Config, store: Store):
+    def __init__(self, config: Config, store: Store, additional=None):
         self.config = config
         self.store = store
+        self.additional = additional
         self.server: asyncio.Server | None = None
         self.connections: set[asyncio.Task] = set()
         self.writers: set[asyncio.StreamWriter] = set()
@@ -246,7 +247,8 @@ class SMTPServer:
                 return
             identifier = str(uuid.uuid4())
             try:
-                message = prepare_message(bytes(content), recipients, sender, identifier, self.config)
+                extra = self.additional.selected_sender if self.additional else ""
+                message = prepare_message(bytes(content), recipients, sender, identifier, self.config, extra)
             except (MessageRejected, ValueError, TypeError, AttributeError, MessageError):
                 self.counters["rejected_messages"] += 1
                 await self._reply(writer, "554 5.7.1 Invalid message headers, sender, or effective recipients; see gateway policy")

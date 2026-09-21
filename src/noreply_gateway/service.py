@@ -8,6 +8,7 @@ import aiohttp
 from aiohttp import web
 
 from .backend import MicrosoftBackend
+from .additional_sender import AdditionalSender
 from .config import Config
 from .delivery import Dispatcher
 from .oauth import TokenManager
@@ -33,9 +34,10 @@ async def serve(config: Config) -> None:
         session = aiohttp.ClientSession(timeout=timeout, connector=connector, trust_env=False)
         await store.start()
         tokens = TokenManager(config, vault, session)
-        dispatcher = Dispatcher(config, store, MicrosoftBackend(config, tokens, session))
-        smtp = SMTPServer(config, store)
-        ui = AdminUI(config, store, dispatcher, tokens, smtp, vault)
+        additional = AdditionalSender(config, vault, session, MicrosoftBackend(config, tokens, session))
+        dispatcher = Dispatcher(config, store, additional)
+        smtp = SMTPServer(config, store, additional)
+        ui = AdminUI(config, store, dispatcher, tokens, smtp, vault, additional)
         runner = web.AppRunner(ui.app, access_log=None)
         await runner.setup()
         await web.TCPSite(runner, config.web.host, config.web.port).start()

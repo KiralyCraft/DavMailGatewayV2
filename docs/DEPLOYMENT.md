@@ -86,6 +86,8 @@ The package does not support 100 sustained Microsoft-mailbox sends/second. Decid
 
 An operator pause is persisted and does not stop intake. Backoff is persisted across restart. Credentials are locally encrypted and rotated, while in-memory WebUI sessions are deliberately not persisted. Account disconnect removes local credentials and pauses delivery, but does not revoke Microsoft grants and cannot undo requests already in flight.
 
+The optional additional Microsoft connection uses `additional_account.enc` and its selected From address uses `additional_sender.enc` in the same private state directory. Back up or restore them with the original credential, vault key, and queue. The original account continues to serve its configured From address. A missing or expired additional credential causes only its messages to retry while the original account continues; inspect that queue before replacing the additional Microsoft identity.
+
 Stop the service before `reset-admin`. Stop it before moving/restoring the private state directory. Preserve ownership and permissions. The copied configuration's `data_dir` is absolute, so moving only the TOML file does not move its queue.
 
 Do not run multiple Python web workers: SMTP, rate state and queue lifecycle belong to one service process. Do not independently copy a live SQLite file without its WAL. An old backup can contain mail already accepted upstream after the backup was made; reconcile before resuming.

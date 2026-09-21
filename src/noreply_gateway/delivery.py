@@ -6,6 +6,7 @@ import random
 import time
 
 from .backend import MicrosoftBackend
+from .additional_sender import AdditionalAuthenticationRequired
 from .config import Config
 from .errors import AuthenticationRequired, Permanent, Retryable, Uncertain
 from .store import Store
@@ -83,6 +84,8 @@ class Dispatcher:
         status, error, delay, cooldown = "submitted", "", 0.0, False
         try:
             await self.backend.send(message)
+        except AdditionalAuthenticationRequired as exc:
+            status, error, delay = "retry", str(exc), 300.0
         except AuthenticationRequired as exc:
             await self.pause(True)
             status, error, delay = "retry", str(exc), 60.0

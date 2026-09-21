@@ -49,6 +49,7 @@ class AccountConfig:
     nat_marker: str = "_NAT_"
     recipient_policy: str = "davmail_union"
     allowed_recipient_domains: list[str] = field(default_factory=list)
+    send_shared: bool = False
 
     @property
     def username(self) -> str:
@@ -56,6 +57,8 @@ class AccountConfig:
 
     @property
     def scope(self) -> str:
+        if self.backend == "graph" and self.send_shared:
+            return "openid profile offline_access User.Read Mail.Send Mail.Send.Shared"
         resource_scope = "https://graph.microsoft.com/Mail.Send" if self.backend == "graph" else "https://outlook.office365.com/EWS.AccessAsUser.All"
         return "openid profile offline_access " + resource_scope
 
@@ -100,6 +103,8 @@ class Config:
         mailbox(self.account.username)
         if self.account.backend not in {"ews", "graph"}:
             raise ValueError("account.backend must be ews or graph")
+        if not isinstance(self.account.send_shared, bool) or (self.account.send_shared and self.account.backend != "graph"):
+            raise ValueError("account.send_shared must be a boolean and requires Graph")
         if self.account.recipient_policy not in {"davmail_union", "envelope_strict"}:
             raise ValueError("Invalid recipient_policy")
         if self.account.nat_marker == "" or re.search(r"[\r\n\x00]", self.account.nat_marker):

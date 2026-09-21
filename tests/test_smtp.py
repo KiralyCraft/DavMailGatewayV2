@@ -1,5 +1,6 @@
 import asyncio
 import smtplib
+from types import SimpleNamespace
 
 import pytest
 
@@ -54,6 +55,25 @@ async def test_from_mismatch_is_rejected(smtp, store):
             assert exc.value.smtp_code == 554
     await asyncio.to_thread(run)
     assert (await store.stats())["counters"].get("accepted", 0) == 0
+
+
+async def test_selected_additional_address_is_accepted_by_live_smtp(config, store):
+    server = SMTPServer(config, store, SimpleNamespace(selected_sender="shared@example.test"))
+    await server.start()
+    try:
+        def run():
+            with smtplib.SMTP("127.0.0.1", server.port, timeout=5) as client:
+                raw = "From: shared@example.test\r\nTo: recipient@example.test\r\nSubject: delegated\r\n\r\nbody\r\n"
+                assert client.sendmail("ignored@example.test", ["recipient@example.test"], raw) == {}
+                with pytest.raises(smtplib.SMTPDataError) as error:
+                    client.sendmail("ignored@example.test", ["recipient@example.test"], raw.replace("shared@example.test", "unlisted@example.test"))
+                assert error.value.smtp_code == 554
+        await asyncio.to_thread(run)
+        rows = await store.messages()
+        assert len(rows) == 1
+        assert b"From: shared@example.test" in await store.export(rows[0]["id"])
+    finally:
+        await server.close()
 
 
 async def test_sequence_empty_envelope_and_rset(smtp, store):

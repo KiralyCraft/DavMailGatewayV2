@@ -5,19 +5,23 @@ let csrf = "";
 let before = null;
 let lastRows = [];
 let refreshing = false;
+let oauthKind = "original";
+let senderDialogDismissed = false;
 const element = (id) => document.getElementById(id);
 const number = (value) => Number(value || 0).toLocaleString();
 const bytes = (value) => value >= 1073741824 ? (value / 1073741824).toFixed(2) + " GiB" : (value / 1048576).toFixed(1) + " MiB";
 function notice(text, success = false) { const node = element("notice"); node.textContent = text; node.className = success ? "success" : ""; node.hidden = false; }
+function formStatus(id, value) { const node = element(id); node.textContent = value; node.hidden = !value; }
 async function api(path, payload) {
     const options = {credentials: "same-origin", headers: {}};
     if (payload !== undefined) { options.method = "POST"; options.headers = {"Content-Type": "application/json", "X-CSRF-Token": csrf}; options.body = JSON.stringify(payload); }
     const response = await fetch(appUrl(path), options);
-    const data = await response.json();
+    let data;
+    try { data = await response.json(); } catch { throw new Error("Gateway returned HTTP " + response.status + " without a readable response"); }
     if (response.ok === false) { if (response.status === 401) showLogin(); throw new Error(data.error || "Request failed"); }
     return data;
 }
-function showLogin() { csrf = ""; element("login-panel").hidden = false; element("dashboard").hidden = true; element("logout").hidden = true; text("status-pill", "Sign in required"); element("status-pill").className = "pill"; }
+function showLogin() { csrf = ""; if (element("sender-dialog").open) element("sender-dialog").close(); text("default-sender", ""); element("custom-sender").value = ""; element("login-panel").hidden = false; element("dashboard").hidden = true; element("logout").hidden = true; text("status-pill", "Sign in required"); element("status-pill").className = "pill"; }
 function showDashboard() { element("login-panel").hidden = true; element("dashboard").hidden = false; element("logout").hidden = false; }
 async function guarded(action) { try { await action(); } catch (error) { notice(error.message); } }
 function text(id, value) { element(id).textContent = value; }
@@ -32,6 +36,12 @@ function renderStats(data) {
     text("credential-mode", data.account.credential_origin); text("sent-items", data.save_in_sent ? "Save a copy" : "Do not save");
     text("nat-marker", data.nat_marker + " in From");
     text("account-state", data.account.last_error || (data.account.credential_present ? (data.account.last_refresh ? "Credentials refreshed successfully." : "Imported credential present; not yet verified with Microsoft.") : "No sending account is connected."));
+    const additional = data.additional;
+    if (additional) {
+        text("additional-state", additional.account.needs_login && additional.account.credential_present ? "Microsoft sign-in required again for the additional account." : additional.selected_sender ? "Sending as " + additional.selected_sender + " via " + additional.account.username : additional.default_sender ? "Connected as " + additional.account.username + ". Choose a From address." : "No additional account connected.");
+        element("sender-change").hidden = !additional.default_sender;
+        if (additional.choice_needed && !senderDialogDismissed && !element("sender-dialog").open) openSenderDialog(additional);
+    }
     element("ews-warning").hidden = data.backend !== "ews";
     const state = data.healthy === false ? "Queue fault" : data.paused ? "Paused" : data.cooldown_remaining > 0 ? "Backing off" : "Running";
     text("status-pill", state); text("run-state", state);
@@ -96,13 +106,28 @@ async function refresh() {
     refreshing = true;
     try { const params = new URLSearchParams({status: element("filter").value}); if (before !== null) { params.set("before", String(before.created)); params.set("before_id", before.id); } const [stats, rows] = await Promise.all([api("/api/stats"), api("/api/messages?" + params)]); renderStats(stats); renderMessages(rows); } finally { refreshing = false; }
 }
-element("login-form").addEventListener("submit", (event) => { event.preventDefault(); guarded(async () => { const result = await api("/api/login", {password: element("password").value}); element("password").value = ""; csrf = result.csrf; element("notice").hidden = true; showDashboard(); await refresh(); }); });
+element("login-form").addEventListener("submit", (event) => { event.preventDefault(); guarded(async () => { const result = await api("/api/login", {password: element("password").value}); element("password").value = ""; csrf = result.csrf; senderDialogDismissed = false; element("notice").hidden = true; showDashboard(); await refresh(); }); });
 element("logout").addEventListener("click", () => guarded(async () => { await api("/api/logout", {}); showLogin(); }));
 element("pause").addEventListener("click", () => guarded(async () => { await api("/api/control", {paused: true}); await refresh(); }));
 element("resume").addEventListener("click", () => guarded(async () => { await api("/api/control", {paused: false}); await refresh(); }));
 element("rate-form").addEventListener("submit", (event) => { event.preventDefault(); guarded(async () => { const rate = Number(element("rate").value); if (rate > 0.5 && window.confirm("This exceeds the default Microsoft mailbox sending rate. It does not increase provider quotas. Apply anyway?") === false) return; await api("/api/control", {rate}); await refresh(); }); });
-element("account-login").addEventListener("click", () => guarded(async () => { const data = await api("/api/account/login", {}); element("authorization-link").href = data.authorization_url; element("oauth-panel").hidden = false; }));
-element("oauth-form").addEventListener("submit", (event) => { event.preventDefault(); guarded(async () => { const value = element("redirect-url").value; element("redirect-url").value = ""; await api("/api/account/complete", {redirect_url: value}); element("oauth-panel").hidden = true; notice("Account connected. Resume delivery when you are ready.", true); await refresh(); }); });
+function openSenderDialog(data) {
+    formStatus("sender-status", "");
+    text("default-sender", data.default_sender);
+    const mode = data.mode === "custom" ? "custom" : "default";
+    element("sender-form").elements["sender-mode"].value = mode;
+    element("custom-sender").value = mode === "custom" ? data.selected_sender : "";
+    element("custom-sender").required = mode === "custom";
+    element("sender-dialog").showModal();
+}
+element("account-login").addEventListener("click", () => guarded(async () => { oauthKind = "original"; const data = await api("/api/account/login", {}); formStatus("oauth-status", ""); element("authorization-link").href = data.authorization_url; element("oauth-panel").hidden = false; }));
+element("additional-login").addEventListener("click", () => guarded(async () => { oauthKind = "additional"; const data = await api("/api/additional/login", {}); formStatus("oauth-status", ""); element("authorization-link").href = data.authorization_url; element("oauth-panel").hidden = false; }));
+element("oauth-form").addEventListener("submit", (event) => { event.preventDefault(); const button = element("oauth-submit"); if (button.disabled) return; button.disabled = true; formStatus("oauth-status", "Completing Microsoft login…"); (async () => { try { const value = element("redirect-url").value; const result = await api("/api/account/complete", {redirect_url: value}); element("oauth-panel").hidden = true; element("redirect-url").value = ""; senderDialogDismissed = false; notice(oauthKind === "additional" ? "Microsoft account connected. Choose the From address." : "Account connected. Resume delivery when you are ready.", true); await refresh(); if (oauthKind === "additional" && result.additional && !element("sender-dialog").open) openSenderDialog(result.additional); } catch (error) { formStatus("oauth-status", error.message + ". Start a new Microsoft login before retrying if the code was used."); } finally { button.disabled = false; } })(); });
+element("sender-change").addEventListener("click", () => guarded(async () => { const data = await api("/api/stats"); openSenderDialog(data.additional); }));
+element("sender-form").addEventListener("change", () => { element("custom-sender").required = element("sender-form").elements["sender-mode"].value === "custom"; });
+element("sender-dialog").addEventListener("close", () => { senderDialogDismissed = true; });
+element("sender-later").addEventListener("click", () => element("sender-dialog").close());
+element("sender-form").addEventListener("submit", (event) => { event.preventDefault(); const button = element("sender-save"); if (button.disabled) return; button.disabled = true; formStatus("sender-status", "Saving sender choice…"); (async () => { try { const mode = element("sender-form").elements["sender-mode"].value; await api("/api/additional/sender", {mode, custom_sender: element("custom-sender").value}); element("sender-dialog").close(); notice("From address selected. Send a test before using it for automated mail.", true); await refresh(); } catch (error) { formStatus("sender-status", error.message); } finally { button.disabled = false; } })(); });
 element("account-disconnect").addEventListener("click", () => guarded(async () => { if (window.confirm("Pause delivery and remove the locally stored account credentials? Requests already in flight may finish.") === false) return; await api("/api/account/disconnect", {}); await refresh(); }));
 element("filter").addEventListener("change", () => guarded(async () => { before = null; await refresh(); }));
 element("older").addEventListener("click", () => guarded(async () => { if (lastRows.length) before = lastRows[lastRows.length - 1]; await refresh(); }));

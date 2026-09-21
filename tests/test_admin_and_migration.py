@@ -9,6 +9,7 @@ from aiohttp import web
 from yarl import URL
 
 from noreply_gateway.cli import config_text, main
+from noreply_gateway.additional_sender import AdditionalSender
 from noreply_gateway.config import Config, load_config
 from noreply_gateway.delivery import Dispatcher
 from noreply_gateway.migration import apply_davmail, imported_record, read_properties
@@ -99,6 +100,27 @@ async def test_prefixed_admin_routes_and_authentication(prefixed_admin):
     assert (await session.get(url + "/api/stats")).status == 401
     assert ui.client_key(SimpleNamespace(remote="192.0.2.2", headers={"X-Forwarded-For": "198.51.100.9, 203.0.113.4"})) == "203.0.113.4"
     assert ui.client_key(SimpleNamespace(remote="192.0.2.5", headers={"X-Forwarded-For": "198.51.100.9"})) == "192.0.2.5"
+
+
+async def test_additional_sender_choice_requires_admin_and_keeps_original_account(admin, vault, config):
+    session, url, ui = admin
+    ui.additional = AdditionalSender(config, vault, None, None)
+    html = await (await session.get(url + "/")).text()
+    assert 'id="sender-dialog"' in html
+    assert 'id="default-sender"' in html
+    assert 'id="oauth-status"' in html and 'id="sender-status"' in html
+    assert (await session.post(url + "/api/additional/sender", json={"mode": "default"})).status == 401
+    headers = await login(session, url)
+    assert (await session.post(url + "/api/additional/sender", json={"mode": "default"}, headers=headers)).status == 400
+    vault.write("account", {"refresh_token": "original-offline-token"})
+    ui.additional.tokens.record.update(username="person@example.test", default_sender="person@example.test", refresh_token="additional-offline-token")
+    await ui.additional.completed_login()
+    response = await session.post(url + "/api/additional/sender", json={"mode": "custom", "custom_sender": "shared@example.test"}, headers=headers)
+    assert response.status == 200
+    selected = (await response.json())["additional"]
+    assert selected["default_sender"] == "person@example.test"
+    assert selected["selected_sender"] == "shared@example.test"
+    assert vault.read("account")["refresh_token"] == "original-offline-token"
 
 
 def test_prefixed_config_validation(config):

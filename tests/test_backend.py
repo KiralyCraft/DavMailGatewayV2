@@ -89,6 +89,19 @@ async def test_http_error_classification(config, message, code, error, headers):
             assert exc.value.global_cooldown
 
 
+async def test_graph_send_as_denial_fails_only_that_message(config, message):
+    config.account.backend = "graph"
+    async def handler(request):
+        await request.read()
+        return web.json_response({"error": {"code": "ErrorSendAsDenied"}}, status=403)
+    async with endpoint(handler) as url, aiohttp.ClientSession() as session:
+        instance = MicrosoftBackend(config, FakeTokens(), session)
+        instance.endpoint = url
+        prepared = message()
+        with pytest.raises(Permanent, match="Send As"):
+            await instance.send({"id": prepared.id, "mime": prepared.mime})
+
+
 @pytest.mark.parametrize("code,error", [("ErrorServerBusy", Retryable), ("ErrorSendQuotaExceeded", Retryable), ("ErrorInvalidRecipients", Permanent), ("ErrorAccessDenied", AuthenticationRequired), ("ErrorTimeoutExpired", Uncertain)])
 def test_ews_error_codes(config, code, error):
     instance = MicrosoftBackend(config, FakeTokens(), None)

@@ -61,8 +61,8 @@ class MicrosoftBackend:
         headers = {
             "Authorization": "Bearer " + token,
             "Content-Type": "text/plain" if graph else "text/xml; charset=utf-8",
-            "X-AnchorMailbox": self.config.account.sender,
-            "User-Agent": "noreply-mcs-gateway/0.1.0",
+            "X-AnchorMailbox": getattr(self.tokens, "record", {}).get("username", self.config.account.username) if graph else self.config.account.sender,
+            "User-Agent": "noreply-mcs-gateway/0.2.0",
             "client-request-id": message["id"],
             "return-client-request-id": "true",
         }
@@ -78,6 +78,13 @@ class MicrosoftBackend:
                 if response.status == 401:
                     await self.tokens.rejected_token(token)
                 if response.status == 403:
+                    if graph:
+                        try:
+                            code = json.loads(content).get("error", {}).get("code", "")
+                        except (ValueError, AttributeError):
+                            code = ""
+                        if code == "ErrorSendAsDenied":
+                            raise Permanent("Microsoft denied Send As for the selected From address")
                     raise AuthenticationRequired("Upstream access denied; verify consent, account permissions, and service availability")
                 if response.status == 429:
                     raise Retryable("Upstream HTTP 429 throttling", delay=delay, global_cooldown=True)

@@ -76,7 +76,7 @@ def initialize(args) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Send-only Microsoft 365 SMTP gateway")
-    parser.add_argument("--version", action="version", version="%(prog)s 0.1.0")
+    parser.add_argument("--version", action="version", version="%(prog)s 0.2.0")
     commands = parser.add_subparsers(dest="command", required=True)
     init = commands.add_parser("init", help="Create private state, configuration, and admin password")
     init.add_argument("--config", type=Path, default=Path("gateway.toml"))
@@ -115,6 +115,8 @@ def main(argv: list[str] | None = None) -> int:
                         if not vault.read("admin"):
                             raise ValueError("Administration credentials are missing")
                         vault.read("account")  # Detect an unreadable vault without exposing its contents.
+                        vault.read("additional_account")
+                        vault.read("additional_sender")
                         print("Configuration and private state are readable. No network request or mailbox verification was performed.")
                 finally:
                     lock.close()

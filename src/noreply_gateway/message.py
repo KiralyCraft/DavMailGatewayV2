@@ -44,7 +44,7 @@ class PreparedMessage:
     nat: bool
 
 
-def prepare_message(raw: bytes, recipients: list[str], envelope_sender: str, queue_id: str, config: Config) -> PreparedMessage:
+def prepare_message(raw: bytes, recipients: list[str], envelope_sender: str, queue_id: str, config: Config, additional_sender: str = "") -> PreparedMessage:
     if len(raw) > config.smtp.max_message_bytes:
         raise MessageRejected("Message too large")
     head, sep, body = raw.partition(b"\r\n\r\n")
@@ -79,10 +79,10 @@ def prepare_message(raw: bytes, recipients: list[str], envelope_sender: str, que
         del message["Subject"]
         message["Subject"] = subject + " (Sender: " + original + ")"
         message.replace_header("From", config.account.sender)
-    elif mailbox(sender_header.addresses[0].addr_spec).casefold() != config.account.sender.casefold():
+    elif mailbox(sender_header.addresses[0].addr_spec).casefold() not in {config.account.sender.casefold(), additional_sender.casefold()}:
         raise MessageRejected("From must match the configured sending mailbox, or contain the NAT marker")
     sender = message["Sender"]
-    if sender is not None and (sender.defects or len(sender.addresses) != 1 or sender.addresses[0].addr_spec.casefold() != config.account.sender.casefold()):
+    if sender is not None and (sender.defects or len(sender.addresses) != 1 or sender.addresses[0].addr_spec.casefold() != mailbox(message["From"].addresses[0].addr_spec).casefold()):
         raise MessageRejected("Sender header must match the configured mailbox")
 
     envelope = list(dict.fromkeys(mailbox(r) for r in recipients))
@@ -127,4 +127,6 @@ def prepare_message(raw: bytes, recipients: list[str], envelope_sender: str, que
     mime = encoded_headers + b"\r\n\r\n" + body
     if len(mime) > config.smtp.max_message_bytes:
         raise MessageRejected("Rewritten message exceeds the configured size limit")
+    if additional_sender and message["From"].addresses[0].addr_spec.casefold() == additional_sender.casefold() and len(mime) > 2_500_000:
+        raise MessageRejected("Additional Graph sender is limited to 2,500,000-byte MIME messages")
     return PreparedMessage(queue_id, mime, list(effective.values()), envelope_sender, original_from, str(message.get("Subject", "")), message_id, nat)

@@ -1,6 +1,6 @@
 # DavMailGatewayV2
 
-DavMailGatewayV2 lets applications on a trusted network send email through one Microsoft 365 mailbox. An application speaks ordinary SMTP to this service; the service stores the message in a local queue and submits it to Microsoft using the configured account.
+DavMailGatewayV2 lets applications on a trusted network send email through Microsoft 365. An application speaks ordinary SMTP to this service; the service stores the message in a local queue and submits it to Microsoft using a connected account. An optional second Microsoft connection can send from its own address or one delegated address.
 
     Your application → SMTP → DavMailGatewayV2 → Microsoft 365 → recipients
                                   │
@@ -8,7 +8,7 @@ DavMailGatewayV2 lets applications on a trusted network send email through one M
 
 This is a **send-only bridge**, not an inbox or general mail server. It does not receive mail, offer IMAP/POP, or authenticate SMTP clients. Access to its SMTP port must be limited by both an IP allowlist and a firewall. The website has a separate administration password; signing in to Microsoft connects the sending account.
 
-Messages are acknowledged to the SMTP client after they are committed to SQLite. A message marked “submitted” was accepted by Microsoft, which does not prove recipient delivery. The default sending rate is 0.5 messages per second; a single mailbox is not a high-volume transactional mail service.
+Messages are acknowledged to the SMTP client after they are committed to SQLite. A message marked “submitted” was accepted by Microsoft, which does not prove recipient delivery. The default total sending rate is 0.5 messages per second; this is not a high-volume transactional mail service.
 
 The project began as a replacement for a patched DavMail sending setup. New deployments should use the Microsoft Graph backend with their own app registration. The EWS backend and migration tool remain for existing installations. No mailbox credentials or deployment state are included in this repository.
 
@@ -19,11 +19,11 @@ The project began as a replacement for a patched DavMail sending setup. New depl
 | Component | Behavior |
 |---|---|
 | SMTP | Port 1025 by default; no AUTH advertisement or password; explicit client CIDR allowlist |
-| Sender | Configured mailbox must be the effective `From`, unless the original NAT marker is present |
+| Sender | The configured address or the selected additional address must be the effective `From`; the original NAT marker still maps to the configured address |
 | NAT | Case-sensitive `_NAT_` in **From**, not Subject; rewrite From and append original identity to Subject |
 | Recipients | Preserves DavMail's union of To/Cc/Bcc and SMTP recipients; missing envelope recipients become Bcc |
 | EWS compatibility | OAuth bearer authentication; MIME `CreateItem` / `SendAndSaveCopy`, or `SendOnly` |
-| Graph migration | Delegated `Mail.Send`, base64 MIME `POST /me/sendMail`, Sent Items saving |
+| Graph migration | Delegated `Mail.Send`, base64 MIME `POST /me/sendMail`, Sent Items saving; optional second connection requests `Mail.Send.Shared` |
 | Browser login | Microsoft authorization code, PKCE, state, nonce, and signature-validated ID token; no Microsoft password collected |
 | Queue | MIME plus metadata committed together to SQLite WAL with `synchronous=FULL` before SMTP 250 |
 | Administration | Login/disconnect account, pause/resume delivery, set rate, inspect/export/retry/cancel retained messages |
@@ -110,7 +110,15 @@ noreply-gateway init --config ./gateway.toml \
 
 The two UUID arguments above must be replaced with actual UUIDs. Keep `save_in_sent = true`: this package's Graph backend uses MIME submission, not the JSON `saveToSentItems=false` path. It deliberately does not implement Graph draft creation or large-attachment upload sessions.
 
-To switch an existing instance, pause delivery, let active attempts finish, stop the service, change `account.backend`, tenant, client, and redirect settings, then restart and sign in again. Changing the credential identity invalidates the cached credential. Retained mail may be sent through a different backend **only for the same configured sender**. Changing the mailbox itself is refused while any bodies remain retained. `account.login_username` can differ from `sender` for a verified login alias; Microsoft still enforces whatever send permission that identity has. This is not a multi-account or automatic shared-mailbox routing service.
+To switch the configured account, pause delivery, let active attempts finish, stop the service, change `account.backend`, tenant, client, and redirect settings, then restart and sign in again. Changing the credential identity invalidates the cached credential. Changing the configured mailbox itself is refused while any bodies remain retained.
+
+### Optional additional From address
+
+In the administration page, choose **Connect Microsoft account** under **Additional From address**. This connection is stored separately, so it does not replace the configured sending account. It uses the Graph application and redirect settings already configured for the gateway. The application must be allowed delegated `Mail.Send`, `Mail.Send.Shared`, and `User.Read`; tenant consent may be required.
+
+After Microsoft sign-in, the gateway reads the signed-in account's `mail` address from Graph `/me` (or its `userPrincipalName` when `mail` is empty). The sender dialog offers **Use default address**, displayed read-only, or **Use a custom address**, entered by the administrator. The gateway cannot list delegated mailboxes. Microsoft requires the signed-in user to have Exchange **Send As** or **Send on Behalf** rights for a custom address, and checks those rights when mail is submitted. A rejected Send As attempt is reported as failed in the queue. [Microsoft's delegated sending guidance](https://learn.microsoft.com/en-us/graph/outlook-send-mail-from-other-user) explains the permission model.
+
+SMTP clients select the additional address by putting the exact selected address in the message's `From` header. The original configured address remains accepted and uses its original Microsoft connection. Other From addresses are rejected. Changing the selected additional address affects new SMTP submissions; already queued messages retain their From header and remain routed through the additional connection. Send a controlled message and check the received From address before changing an automated application's mail settings.
 
 ## Configure trusted SMTP clients
 
@@ -125,7 +133,7 @@ allowed_networks = ["10.20.30.21/32", "10.20.30.22/32", "127.0.0.1/32"]
 
 Restart after editing configuration. Do not append duplicate TOML sections. These example addresses must be replaced. Enforce the same boundary with a firewall. World-wide `/0` allowlists are rejected; that check is not a substitute for reviewing the CIDRs you choose.
 
-Clients are passwordless, so **any allowed client can submit as this account**. A correct `From` is a routing/policy requirement, not proof of user identity. Do not expose this listener to the public Internet. When Docker, a proxy, or NAT changes the observed peer IP, review the resulting trust boundary rather than broadly trusting a bridge address without understanding who can reach it.
+Clients are passwordless, so **any allowed client can submit as an enabled sender**. A correct `From` is a routing/policy requirement, not proof of user identity. Do not expose this listener to the public Internet. When Docker, a proxy, or NAT changes the observed peer IP, review the resulting trust boundary rather than broadly trusting a bridge address without understanding who can reach it.
 
 Plain SMTP is intended for a trusted host/network. Optional `smtp.tls_cert` and `smtp.tls_key` enable **implicit TLS on that listener**; use `smtplib.SMTP_SSL` in that case. STARTTLS is not implemented. Neither TLS mode adds SMTP AUTH.
 

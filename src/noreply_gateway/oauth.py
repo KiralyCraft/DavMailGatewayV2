@@ -32,6 +32,8 @@ class LoginFlow:
 
 def account_fingerprint(config: Config) -> str:
     values = (config.account.sender.casefold(), config.account.username.casefold(), config.account.backend, config.account.tenant_id, config.account.client_id, config.account.redirect_uri)
+    if config.account.send_shared:
+        values += ("Mail.Send.Shared",)
     return hashlib.sha256(json.dumps(values).encode()).hexdigest()
 
 
@@ -43,12 +45,14 @@ class TokenManager:
     cryptographically verified ID tokens. No Microsoft password is collected.
     """
 
-    def __init__(self, config: Config, vault: Vault, session: aiohttp.ClientSession):
+    def __init__(self, config: Config, vault: Vault, session: aiohttp.ClientSession, *, record_name: str = "account", allow_any_username: bool = False):
         self.config = config
         self.vault = vault
         self.session = session
+        self.record_name = record_name
+        self.allow_any_username = allow_any_username
         self.lock = asyncio.Lock()
-        self.record = vault.read("account")
+        self.record = vault.read(record_name)
         self.access_token = ""
         self.expires = 0.0
         self.rejections = 0
@@ -85,9 +89,10 @@ class TokenManager:
             "nonce": flow.nonce,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
-            "login_hint": self.config.account.username,
             "prompt": "select_account",
         }
+        if not self.allow_any_username:
+            parameters["login_hint"] = self.config.account.username
         url = "https://login.microsoftonline.com/" + self.config.account.tenant_id + "/oauth2/v2.0/authorize?" + urlencode(parameters)
         return url, flow
 
@@ -140,13 +145,26 @@ class TokenManager:
             if hmac.compare_digest(str(claims["nonce"]), nonce) is False:
                 raise ValueError("Nonce mismatch")
             username = claims.get("preferred_username") or claims.get("upn") or claims.get("unique_name")
-            if isinstance(username, str) is False or username.casefold() != self.config.account.username.casefold():
+            if isinstance(username, str) is False or (not self.allow_any_username and username.casefold() != self.config.account.username.casefold()):
                 raise ValueError("The signed-in account does not match account.login_username")
             return claims
         except (jwt.PyJWTError, KeyError, TypeError, ValueError):
             raise AuthenticationRequired("ID token validation failed, or the signed-in account does not match the configured login username") from None
 
-    async def complete_login(self, flow: LoginFlow, response: dict[str, str]) -> None:
+    async def _profile_address(self, access_token: str) -> str:
+        from .message import mailbox
+        try:
+            async with self.session.get("https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName", headers={"Authorization": "Bearer " + access_token}, allow_redirects=False) as response:
+                content = await read_limited(response.content)
+                if response.status != 200:
+                    raise AuthenticationRequired("Could not read the signed-in Microsoft address")
+                profile = json.loads(content)
+                address = profile.get("mail") or profile.get("userPrincipalName")
+                return mailbox(address)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ResponseTooLarge, ValueError, TypeError, AttributeError):
+            raise AuthenticationRequired("Could not read a valid address from the signed-in Microsoft account") from None
+
+    async def complete_login(self, flow: LoginFlow, response: dict[str, str]) -> str:
         if flow.expires < time.time() or hmac.compare_digest(response.get("state", ""), flow.state) is False:
             raise AuthenticationRequired("Expired login or OAuth state mismatch")
         if "error" in response or not response.get("code"):
@@ -162,14 +180,16 @@ class TokenManager:
             }
             self._add_client_secret(data)
             result = await self._read_json("https://login.microsoftonline.com/" + self.config.account.tenant_id + "/oauth2/v2.0/token", data)
-            await self._verify_id_token(result.get("id_token", ""), flow.nonce)
+            claims = await self._verify_id_token(result.get("id_token", ""), flow.nonce)
             if not result.get("refresh_token"):
                 raise AuthenticationRequired("No refresh token returned; offline_access consent is required")
-            await self._save_result(result, "v2")
+            address = await self._profile_address(result["access_token"]) if self.allow_any_username else self.config.account.username
+            await self._save_result(result, "v2", username=claims.get("preferred_username") or claims.get("upn") or claims.get("unique_name"), default_sender=address)
             self.needs_login = False
             self.last_error = ""
             self.rejections = 0
             self.rejected_digest = ""
+            return address
 
     def _add_client_secret(self, data: dict) -> None:
         variable = self.config.account.client_secret_env
@@ -179,14 +199,15 @@ class TokenManager:
                 raise AuthenticationRequired("Configured OAuth client-secret environment variable is missing")
             data["client_secret"] = secret
 
-    async def _save_result(self, result: dict, mode: str) -> None:
+    async def _save_result(self, result: dict, mode: str, *, username: str | None = None, default_sender: str | None = None) -> None:
         token = result.get("access_token")
         if isinstance(token, str) is False or token == "" or str(result.get("token_type", "Bearer")).casefold() != "bearer":
             raise AuthenticationRequired("Token endpoint did not return a bearer access token")
         record = {
             "fingerprint": account_fingerprint(self.config),
             "mode": mode,
-            "username": self.config.account.username,
+            "username": username or self.record.get("username", self.config.account.username),
+            "default_sender": default_sender or self.record.get("default_sender", self.config.account.sender),
             "refresh_token": result.get("refresh_token", self.record.get("refresh_token")),
             "last_refresh": time.time(),
         }
@@ -196,7 +217,7 @@ class TokenManager:
         # fails. Never submit mail until credential persistence succeeds.
         self.record = record
         try:
-            await asyncio.to_thread(self.vault.write, "account", record)
+            await asyncio.to_thread(self.vault.write, self.record_name, record)
         except OSError:
             raise Retryable("Cannot persist renewed account credentials", delay=30, global_cooldown=True) from None
         self.access_token = token
@@ -250,7 +271,7 @@ class TokenManager:
 
     async def disconnect(self) -> None:
         async with self.lock:
-            await asyncio.to_thread(self.vault.write, "account", {})
+            await asyncio.to_thread(self.vault.write, self.record_name, {})
             self.record = {}
             self.access_token = ""
             self.expires = 0

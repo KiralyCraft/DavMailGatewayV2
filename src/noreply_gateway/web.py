@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, urlsplit
 from aiohttp import web
 
 from .config import Config
+from .additional_sender import AdditionalSender
 from .delivery import Dispatcher
 from .errors import AuthenticationRequired, Retryable
 from .oauth import LoginFlow, TokenManager
@@ -27,6 +28,7 @@ class AdminSession:
     csrf: str
     expires: float
     flow: LoginFlow | None = None
+    flow_kind: str = "original"
 
 
 class AdminUI:
@@ -34,13 +36,14 @@ class AdminUI:
     LOGIN_PER_CLIENT_LIMIT = 5
     LOGIN_GLOBAL_LIMIT = 40
 
-    def __init__(self, config: Config, store: Store, dispatcher: Dispatcher, tokens: TokenManager, smtp: SMTPServer, vault: Vault):
+    def __init__(self, config: Config, store: Store, dispatcher: Dispatcher, tokens: TokenManager, smtp: SMTPServer, vault: Vault, additional: AdditionalSender | None = None):
         self.config = config
         self.store = store
         self.dispatcher = dispatcher
         self.tokens = tokens
         self.smtp = smtp
         self.vault = vault
+        self.additional = additional
         self.admin = vault.read("admin")
         self.sessions: dict[str, AdminSession] = {}
         self.attempts: dict[str, deque] = defaultdict(deque)
@@ -55,6 +58,7 @@ class AdminUI:
             web.get(path("/api/messages/{id}/eml"), self.export), web.post(path("/api/messages/{id}/{action}"), self.action),
             web.post(path("/api/control"), self.control), web.post(path("/api/account/login"), self.begin_login),
             web.post(path("/api/account/complete"), self.complete_login), web.post(path("/api/account/disconnect"), self.disconnect),
+            web.post(path("/api/additional/login"), self.begin_additional_login), web.post(path("/api/additional/sender"), self.choose_additional_sender),
             web.get(path("/oauth/callback"), self.callback), web.get(path("/health/live"), self.live), web.get(path("/health/ready"), self.ready),
         ])
         if self.prefix:
@@ -199,6 +203,7 @@ class AdminUI:
             "smtp_host": self.config.smtp.host, "allowed_networks": self.config.smtp.allowed_networks,
             "max_queue_messages": self.config.queue.max_messages, "max_queue_bytes": self.config.queue.max_bytes,
             "recipient_limit_24h": self.config.delivery.recipient_limit_24h,
+            "additional": self.additional.status() if self.additional else None,
         })
         return web.json_response(result)
 
@@ -237,6 +242,15 @@ class AdminUI:
     async def begin_login(self, request):
         url, flow = self.tokens.begin_login()
         request["admin_session"].flow = flow
+        request["admin_session"].flow_kind = "original"
+        return web.json_response({"authorization_url": url, "redirect_uri": self.config.account.redirect_uri})
+
+    async def begin_additional_login(self, request):
+        if self.additional is None:
+            raise ValueError("Additional sending account is unavailable")
+        url, flow = self.additional.tokens.begin_login()
+        request["admin_session"].flow = flow
+        request["admin_session"].flow_kind = "additional"
         return web.json_response({"authorization_url": url, "redirect_uri": self.config.account.redirect_uri})
 
     async def _finish(self, request, response: dict):
@@ -244,7 +258,11 @@ class AdminUI:
         flow, session.flow = session.flow, None
         if flow is None:
             raise ValueError("Start a new Microsoft login in this browser session")
-        await self.tokens.complete_login(flow, response)
+        if session.flow_kind == "additional":
+            await self.additional.tokens.complete_login(flow, response)
+            await self.additional.completed_login()
+        else:
+            await self.tokens.complete_login(flow, response)
         # Login does not silently undo an operator-requested pause or backoff.
 
     async def complete_login(self, request):
@@ -260,7 +278,14 @@ class AdminUI:
         if len({key for key, value in items}) != len(items):
             raise ValueError("Duplicate OAuth callback parameters")
         await self._finish(request, dict(items))
-        return web.json_response({"ok": True})
+        return web.json_response({"ok": True, "additional": self.additional.status() if self.additional else None})
+
+    async def choose_additional_sender(self, request):
+        if self.additional is None:
+            raise ValueError("Additional sending account is unavailable")
+        payload = await request.json()
+        await self.additional.choose(payload.get("mode"), payload.get("custom_sender", ""))
+        return web.json_response({"ok": True, "additional": self.additional.status()})
 
     async def callback(self, request):
         if self.config.account.redirect_uri != self.config.web.base_url + "/oauth/callback":
