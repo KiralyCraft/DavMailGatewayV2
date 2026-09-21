@@ -1,0 +1,31 @@
+[Unit]
+Description=Passwordless trusted-network SMTP to Microsoft 365 gateway
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=noreply-gateway
+Group=noreply-gateway
+WorkingDirectory=/var/lib/noreply-gateway
+ExecStart=/opt/noreply-gateway/.venv/bin/noreply-gateway serve --config /etc/noreply-gateway/gateway.toml
+EnvironmentFile=-/etc/noreply-gateway/secrets.env
+StateDirectory=noreply-gateway
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=180
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/noreply-gateway
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+.venv
+.git
+__pycache__
+.pytest_cache
+state
+*.enc
+*.sqlite3*
+gateway.toml
+vault.key
+.env
+dist
+build
+
+runtime

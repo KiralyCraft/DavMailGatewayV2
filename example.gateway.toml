@@ -1,0 +1,60 @@
+# SMTP has no AUTH. Restrict trusted clients with CIDRs AND a firewall.
+# The WebUI password is separate. Never put Microsoft tokens in this file.
+data_dir = "state"
+
+[smtp]
+host = "127.0.0.1"
+port = 1025
+hostname = "noreply-gateway.local"
+allowed_networks = ["127.0.0.0/8", "::1/128"]
+max_connections = 128
+max_message_bytes = 2000000
+max_recipients = 500
+max_header_bytes = 131072
+max_buffer_bytes = 67108864
+command_timeout = 60.0
+data_timeout = 120.0
+tls_cert = ""
+tls_key = ""
+
+[web]
+host = "127.0.0.1"
+port = 8080
+base_url = "http://127.0.0.1:8080"
+session_seconds = 28800
+trusted_proxy_ips = []
+
+[account]
+sender = "noreply@example.org"
+login_username = ""
+backend = "ews"
+tenant_id = "common"
+client_id = "facd6cff-a294-4415-b59f-c5b01937d7bd"
+redirect_uri = "https://login.microsoftonline.com/common/oauth2/nativeclient"
+ews_url = "https://outlook.office365.com/EWS/Exchange.asmx"
+save_in_sent = true
+client_secret_env = ""
+nat_marker = "_NAT_"
+recipient_policy = "davmail_union"
+allowed_recipient_domains = []
+
+[queue]
+max_messages = 100000
+max_bytes = 5368709120
+min_free_bytes = 268435456
+batch_size = 128
+batch_seconds = 0.005
+pending_submissions = 1024
+history_days = 7
+
+[delivery]
+workers = 4
+messages_per_second = 0.5
+recipient_limit_24h = 10000
+max_attempts = 20
+max_age_hours = 72.0
+request_timeout = 60.0
+connect_timeout = 10.0
+retry_base_seconds = 15.0
+retry_max_seconds = 3600.0
+shutdown_seconds = 70.0

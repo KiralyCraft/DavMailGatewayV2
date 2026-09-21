@@ -1,0 +1,18 @@
+# This location is included only by the intended HTTPS virtual host.
+# Replace the example backend address and restrict its HTTP port to that proxy.
+
+<Location /internal/mailgateway>
+    ProxyPass http://192.0.2.10:8080/internal/mailgateway
+    ProxyPassReverse http://192.0.2.10:8080/internal/mailgateway
+    ProxyPreserveHost On
+</Location>
+
+<Location /internal/mailgateway/>
+    ProxyPass http://192.0.2.10:8080/internal/mailgateway/
+    ProxyPassReverse http://192.0.2.10:8080/internal/mailgateway/
+    ProxyPreserveHost On
+</Location>
+
+<LocationMatch "^/internal/mailgateway/health/">
+    Require all denied
+</LocationMatch>

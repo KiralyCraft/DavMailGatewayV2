@@ -1,0 +1,33 @@
+{
+  "test": "OFFLINE SMTP to SQLite WAL/FULL to mock Microsoft HTTP",
+  "backend": "ews",
+  "python": "3.13.5",
+  "platform": "Linux-6.18.35-x86_64-with-glibc2.41",
+  "logical_cpus_visible": 5,
+  "messages": 3000,
+  "nominal_input_bytes": 10240,
+  "sample_input_bytes": 10240,
+  "persistent_smtp_clients": 32,
+  "upstream_workers": 4,
+  "configured_mock_delivery_rate": 1000,
+  "mock_response_delay_ms": 5,
+  "maximum_mock_concurrency": 4,
+  "intake_seconds": 4.7088,
+  "end_to_end_seconds": 10.3152,
+  "smtp_durable_accepts_per_second": 637.11,
+  "end_to_end_mock_submissions_per_second": 290.83,
+  "smtp_transaction_latency_ms": {
+    "p50": 49.25,
+    "p95": 54.28,
+    "p99": 56.4
+  },
+  "accepted": 3000,
+  "mock_submitted": 3000,
+  "duplicate_mock_submissions": 0,
+  "retained_messages_at_end": 0,
+  "sqlite_journal_mode": "wal",
+  "sqlite_synchronous": 2,
+  "peak_rss_kib_entire_test_process": 117164,
+  "live_microsoft_verified": false,
+  "limitations": "One local container, synthetic small messages; clients and mock share the process. No power-loss, real-disk durability, Internet latency, tenant authentication, Microsoft throttling, or final recipient-delivery benchmark."
+}

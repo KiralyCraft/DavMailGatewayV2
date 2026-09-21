@@ -1,0 +1,22 @@
+services:
+  gateway:
+    image: noreply-mcs-gateway:0.1.0
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    # Linux only. Host networking preserves the actual SMTP peer IP and avoids
+    # accidentally treating every Docker-translated connection as trusted.
+    # The initialized listeners remain loopback-only until explicitly edited.
+    network_mode: host
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=16m
+    volumes:
+      - ../runtime:/runtime:rw
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 180s
+    command: [serve, --config, /runtime/gateway.toml]

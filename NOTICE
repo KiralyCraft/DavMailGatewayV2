@@ -1,0 +1,14 @@
+noreply-mcs-gateway 0.1.0
+
+Python reimplementation of a narrow sending workflow inspected in a
+user-supplied patched DavMail source archive. Supplied under GPL-2.0-or-later.
+The GNU General Public License version 2 text is included in LICENSE.
+
+DavMail (upstream project): https://davmail.sourceforge.net/
+DavMail source headers credit Mickael Guessant and contributors.
+The behavior of the supplied local patches is attributed to their respective
+authors. This package is not an official DavMail or Microsoft distribution.
+
+The supplied Java source, binaries, properties file, and real credentials are
+not included. Third-party Python dependencies retain their own licenses and
+are installed separately.

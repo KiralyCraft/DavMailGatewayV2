@@ -1,0 +1,8 @@
+include README.md LICENSE NOTICE
+recursive-include src/noreply_gateway/static *
+recursive-include docs *.md *.json *.png
+recursive-include tests *.py
+recursive-include tools *.py
+recursive-include deploy *
+include example.gateway.toml
+recursive-include docs *.txt
